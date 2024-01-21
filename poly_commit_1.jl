@@ -1,31 +1,37 @@
+using Random
+include("./fft.jl")
+include("./fnv.jl")
+
+# Implements polynomial commitment scheme as described in Zk Mooc class
+# A.k.a. Shockwave (originally introduced by 2021/1043 eprint, GLSTW'21)
+
 # max_coefs_pw = pw * 2 + 1
 
-coefs_matrix_pw = pw-2
+coefs_matrix_pw = pw - 2
 coefs_matrix_side = 2^(coefs_matrix_pw)
 coefs_matrix_N = coefs_matrix_side * coefs_matrix_side
-
-coefs = [rand(0:F-1) for i = 1:coefs_matrix_N]
-
-# Test evaluating polynomial via a squared-size matrix:
 powers_sq_fst = 1:coefs_matrix_side
-plain_calc = dot_mod(coefs, ws[(0:(coefs_matrix_N-1)).%length(ws).+1], F)
-coefs_sq = reshape(coefs, (coefs_matrix_side, coefs_matrix_side))
-first_mul = [dot_mod(ws[powers_sq_fst], Vector(c), F) for c in eachcol(coefs_sq)]
-powers_sq_snd = coefs_matrix_side*Vector(0:coefs_matrix_side-1).+1
-sq_calc = dot_mod(first_mul, ws[(powers_sq_snd.-1).%length(ws).+1], F)
-println(sq_calc == plain_calc)
+powers_sq_snd = coefs_matrix_side * Vector(0:coefs_matrix_side-1) .+ 1
 
-
-function apply_fft_per_row(c)
-    fft_(vcat(c, zeros(Int64, 3 * coefs_matrix_side)), ws)
+function test_sq_matrix_eval()
+    # Test evaluating polynomial via a squared-size matrix:
+    coefs = [rand(0:F-1) for _ = 1:coefs_matrix_N]
+    plain_calc = dot_mod(coefs, ws[(0:(coefs_matrix_N-1)).%length(ws).+1], F)
+    coefs_sq = reshape(coefs, (coefs_matrix_side, coefs_matrix_side))
+    first_mul = [dot_mod(ws[powers_sq_fst], Vector(c), F) for c in eachcol(coefs_sq)]
+    sq_calc = dot_mod(first_mul, ws[(powers_sq_snd.-1).%length(ws).+1], F)
+    (sq_calc == plain_calc)
 end
 
-codeword_matrix = transpose(hcat(apply_fft_per_row.(eachrow(coefs_sq))...))
-column_merkle = fnv1a_merkle(fnv1a.(eachcol(codeword_matrix)))
+test_sq_matrix_eval()
+
+function apply_fft_per_row(c)
+    fft(vcat(c, zeros(Int64, 3 * coefs_matrix_side)), ws)
+end
 
 # Proof doesn't include base index and root as they're assumed
 # to be provided independently 
-function merkle_proof(ix :: Int)
+function merkle_proof_ixs(ix::Int)
     ix = ix + N - 1
     ixs = []
     while ix != 1
@@ -33,10 +39,9 @@ function merkle_proof(ix :: Int)
         ix >>= 1
     end
     reverse!(ixs)
-    column_merkle[ixs]
 end
 
-function merkle_rebuild_root(ix :: Int64, el :: Int64, proof :: Vector{Int64})
+function merkle_rebuild_root(ix::Int64, el::Int64, proof::Vector{Int64})
     ix = ix + N - 1
     for sibling in reverse(proof)
         if ix & 1 > 0
@@ -49,60 +54,166 @@ function merkle_rebuild_root(ix :: Int64, el :: Int64, proof :: Vector{Int64})
     el
 end
 
-merkle_rebuild_root(N, column_merkle[length(column_merkle)], merkle_proof(N))==commitment
+# merkle_rebuild_root(N, column_merkle[length(column_merkle)], column_merkle[merkle_proof_ixs(N)])==commitment
 
-# Prover sends
-commitment = column_merkle[1]
+struct PolyCommit1Proof
+    # commitment fields
+    commitment :: Int64 # merkle root of a commitment to vector of columns
+    r_evaluated :: Vector{Int64} # multiplication of a random vector and coeficient matrix
+    columns :: Matrix{Int64} # select codeword matrix columns
+    column_proofs :: Vector{Vector{Int64}} # merkle proofs of columns above
 
-# Verifier sends
-r = [rand(0:F-1) for i = 1:coefs_matrix_side]
+    # evaluation at a random point
+    point_evaluated :: Vector{Int64} # pre-evaluation of a point (to be opened)
+end
 
-# Prover computes
+function simulate_poly_commit_1(columns_to_check :: Int)
+    coefs = rand(0:F-1, coefs_matrix_N)
+    coefs_sq = reshape(coefs, (coefs_matrix_side, coefs_matrix_side))
+    codeword_matrix = transpose(hcat(apply_fft_per_row.(eachrow(coefs_sq))...))
+    column_merkle = fnv1a_merkle(fnv1a.(eachcol(codeword_matrix)))
 
-# r_evaluated = [dot_mod(r, Vector(c), F) for c in eachcol(codeword_matrix)]
-# r_evaluated_preimage = fft_(r_evaluated, iws) .* powermod(N, F-2, F) .% F
-# println(r_evaluated_preimage[coefs_matrix_side+1:N]==zeros(Int64, coefs_matrix_side*3))
-# r_evaluated_preimage = r_evaluated_preimage[1:coefs_matrix_side]
-r_evaluated_preimage = [dot_mod(r, Vector(c), F) for c in eachcol(coefs_sq)]
+    # Prover sends
+    commitment = column_merkle[1]
 
-# Verifier sends
-col_ixs = [rand(1:N) for i=1:4]
+    # Verifier sends
+    r = rand(0:F-1, coefs_matrix_side)
 
-# Prover sends
-col_proofs = merkle_proof.(col_ixs)
-cols = codeword_matrix[:,col_ixs]
+    # Prover computes
+    r_evaluated = [dot_mod(r, Vector(c), F) for c in eachcol(coefs_sq)]
 
-# Verifier computes
-for (ix, col, proof) in zip(col_ixs, eachcol(cols), col_proofs)
-    assumed_root = merkle_rebuild_root(ix, fnv1a(col), proof)
-    if assumed_root != commitment
-        error("wrong merkle proof")
+    # Verifier sends
+    col_ixs = rand(1:N, columns_to_check)
+
+    # Prover sends
+    col_proofs = map(ixs -> column_merkle[ixs], merkle_proof_ixs.(col_ixs))
+    cols = codeword_matrix[:, col_ixs]
+
+    # Verifier computes
+    for (ix, col, proof) in zip(col_ixs, eachcol(cols), col_proofs)
+        assumed_root = merkle_rebuild_root(ix, fnv1a(col), proof)
+        if assumed_root != commitment
+            error("wrong merkle proof")
+        end
     end
+    r_evaluated_ver = fft(vcat(r_evaluated, zeros(Int64, 3 * coefs_matrix_side)), ws)
+    if r_evaluated_ver[col_ixs] != [dot_mod(r, Vector(c), F) for c in eachcol(cols)]
+        error("wrong codeword-based evaluation")
+    end
+
+    # At this point we verified commitment to the polynomial, time to evaluate at some point?
+    some_point = rand(0:F-1)
+
+    # Verifier sends
+
+    some_point
+
+    # Prover computes
+    some_point_powers = [powermod(some_point, i, F) for i = 0:coefs_matrix_N-1]
+    
+    # Prover sends
+    some_point_pre_eval = [dot_mod(some_point_powers[powers_sq_fst], Vector(c), F) for c in eachcol(coefs_sq)]
+
+    # Verifier computes
+    some_point_pre_eval_fft = fft(vcat(some_point_pre_eval, zeros(Int64, 3 * coefs_matrix_side)), ws)
+    if some_point_pre_eval_fft[col_ixs] != [dot_mod(some_point_powers[powers_sq_fst], Vector(c), F) for c in eachcol(cols)]
+        error("wrong codeword-based evaluation of the point")
+    end
+
+    some_point_eval = dot_mod(some_point_pre_eval, some_point_powers[powers_sq_snd], F)
+
+    some_point_eval == dot_mod(some_point_powers, coefs, F)
 end
-r_evaluated_ver = fft_(vcat(r_evaluated_preimage, zeros(Int64, 3*coefs_matrix_side)), ws)
-if r_evaluated_ver[col_ixs] != [dot_mod(r, Vector(c), F) for c in eachcol(cols)]
-    error("wrong codeword-based evaluation")
+
+simulate_poly_commit_1(4)
+
+function poly_commit_1_prove(coefs :: Vector{Int64}, columns_to_check :: Int)
+    coefs_sq = reshape(coefs, (coefs_matrix_side, coefs_matrix_side))
+    codeword_matrix = transpose(hcat(apply_fft_per_row.(eachrow(coefs_sq))...))
+    column_merkle = fnv1a_merkle(fnv1a.(eachcol(codeword_matrix)))
+
+    # Prover sends
+    commitment = column_merkle[1]
+
+    fiat_shamir_state = [commitment]
+    # Verifier sends
+    r = rand(Random.Xoshiro(abs(fnv1a(fiat_shamir_state))), 0:F-1, coefs_matrix_side)
+
+    # Prover computes
+    r_evaluated = [dot_mod(r, Vector(c), F) for c in eachcol(coefs_sq)]
+
+    fiat_shamir_state = vcat(fiat_shamir_state, r, r_evaluated)
+    # Verifier sends
+    col_ixs = rand(Random.Xoshiro(abs(fnv1a(fiat_shamir_state))),1:N, columns_to_check)
+
+    # Prover sends
+    col_proofs = map(ixs -> column_merkle[ixs], merkle_proof_ixs.(col_ixs))
+    cols = codeword_matrix[:, col_ixs]
+
+    # Verifier computes some stuff...
+
+    fiat_shamir_state = vcat(fiat_shamir_state, reduce(vcat, cols), reduce(vcat, col_proofs))
+    # Verifier sends
+    some_point = rand(Random.Xoshiro(abs(fnv1a(vcat(fiat_shamir_state)))), 0:F-1)
+
+    # Prover computes
+    some_point_powers = [powermod(some_point, i, F) for i = 0:coefs_matrix_side-1]
+    
+    # Prover sends
+    some_point_pre_eval = [dot_mod(some_point_powers, Vector(c), F) for c in eachcol(coefs_sq)]
+
+    PolyCommit1Proof(commitment, r_evaluated, cols, col_proofs, some_point_pre_eval)
 end
 
-# At this point we verified commitment to the polynomial, time to evaluate at some point?
-some_point = rand(0:F-1)
-some_point_powers = [powermod(some_point, i, F) for i = 0:coefs_matrix_N-1]
-some_point_eval_expected = dot_mod(some_point_powers, coefs, F)
+# Verifies poly-commit-1 proof and extracts the evaluation
+function poly_commit_1_verify(proof :: PolyCommit1Proof, columns_to_check :: Int)
+    # Prover sends
+    commitment = proof.commitment
 
-# Verifier sends
+    fiat_shamir_state = [commitment]
+    # Verifier sends
+    r = rand(Random.Xoshiro(abs(fnv1a(fiat_shamir_state))), 0:F-1, coefs_matrix_side)
 
-some_point
+    # Prover computes
+    r_evaluated = proof.r_evaluated
 
-# Prover sends
+    fiat_shamir_state = vcat(fiat_shamir_state, r, r_evaluated)
+    # Verifier sends
+    col_ixs = rand(Random.Xoshiro(abs(fnv1a(fiat_shamir_state))),1:N, columns_to_check)
 
-some_point_pre_eval = [dot_mod(some_point_powers[powers_sq_fst], Vector(c), F) for c in eachcol(coefs_sq)]
+    # Prover sends
+    col_proofs = proof.column_proofs
+    cols = proof.columns
 
-# Verifier computes
-some_point_pre_eval_fft = fft_(vcat(r_evaluated_preimage, zeros(Int64, 3*coefs_matrix_side)), ws)
-if some_point_pre_eval_fft[col_ixs] != [dot_mod(r, Vector(c), F) for c in eachcol(cols)]
-    error("wrong codeword-based evaluation of the point")
+    # Verifier computes
+    for (ix, col, proof) in zip(col_ixs, eachcol(cols), col_proofs)
+        assumed_root = merkle_rebuild_root(ix, fnv1a(col), proof)
+        if assumed_root != commitment
+            error("wrong merkle proof")
+        end
+    end
+    r_evaluated_ver = fft(vcat(r_evaluated, zeros(Int64, 3 * coefs_matrix_side)), ws)
+    if r_evaluated_ver[col_ixs] != [dot_mod(r, Vector(c), F) for c in eachcol(cols)]
+        error("wrong codeword-based evaluation")
+    end
+
+    fiat_shamir_state = vcat(fiat_shamir_state, reduce(vcat, cols), reduce(vcat, col_proofs))
+    # Verifier sends
+    some_point = rand(Random.Xoshiro(abs(fnv1a(vcat(fiat_shamir_state)))), 0:F-1)
+
+    some_point_powers = [powermod(some_point, i, F) for i = 0:coefs_matrix_N-1]
+    
+    # Prover sends
+    some_point_pre_eval = proof.point_evaluated
+    
+    # Verifier computes
+    some_point_pre_eval_fft = fft(vcat(some_point_pre_eval, zeros(Int64, 3 * coefs_matrix_side)), ws)
+    if some_point_pre_eval_fft[col_ixs] != [dot_mod(some_point_powers[powers_sq_fst], Vector(c), F) for c in eachcol(cols)]
+        error("wrong codeword-based evaluation of the point")
+    end
+
+    dot_mod(some_point_pre_eval, some_point_powers[powers_sq_snd], F)
 end
 
-some_point_eval = dot_mod(some_point_pre_eval, some_point_powers[powers_sq_snd], F)
-
-print(some_point_eval == some_point_eval_expected)
+poly1proof = poly_commit_1_prove(rand(0:F-1, coefs_matrix_N), 4)
+poly_commit_1_verify(poly1proof, 4)
