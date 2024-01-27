@@ -30,8 +30,6 @@ function fnv1a(data::AbstractArray{Int64,1}, h=fnv_basis)
     foldr(fnv1a, data; init)
 end
 
-fnv1a([1, 2, 3])
-
 """
 Calculate merkle tree of a vector of size 2^w
 

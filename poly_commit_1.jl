@@ -1,6 +1,7 @@
 using Random
-include("./fft.jl")
-include("./fnv.jl")
+using Test
+include("fft.jl")
+include("fnv.jl")
 
 # Implements polynomial commitment scheme as described in Zk Mooc class
 # A.k.a. Shockwave (originally introduced by 2021/1043 eprint, GLSTW'21)
@@ -125,7 +126,7 @@ function simulate_poly_commit_1(columns_to_check :: Int)
     some_point_eval == dot_mod(some_point_powers, coefs, F)
 end
 
-simulate_poly_commit_1(4)
+@test simulate_poly_commit_1(4)
 
 function poly_commit_1_prove(coefs :: Vector{Int64}, columns_to_check :: Int)
     coefs_sq = reshape(coefs, (coefs_matrix_side, coefs_matrix_side))
@@ -215,5 +216,5 @@ function poly_commit_1_verify(proof :: PolyCommit1Proof, columns_to_check :: Int
     dot_mod(some_point_pre_eval, some_point_powers[powers_sq_snd], F)
 end
 
-poly1proof = poly_commit_1_prove(rand(0:F-1, coefs_matrix_N), 4)
-poly_commit_1_verify(poly1proof, 4)
+# Test that commitment/verification passes
+@test poly_commit_1_verify(poly_commit_1_prove(rand(0:F-1, coefs_matrix_N), 4), 4) >= 0
