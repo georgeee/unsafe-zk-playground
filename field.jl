@@ -31,6 +31,4 @@ while powermod(w, N_halved, F) == 1
     w = powermod(rand(2:F-1), div(F - 1, N), F)
 end
 ws = [powermod(w, i, F) for i = 0:N-1]
-
-iw = inv_mod(w, F)
-iws = [powermod(iw, i, F) for i = 0:N-1]
+iws = vcat([1], reverse(ws[2:end]))
