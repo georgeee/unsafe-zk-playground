@@ -4,6 +4,10 @@ function summod(vs::AbstractArray{Int64}, m::Int64)
     reduce((a, b) -> (a + b) % m, vs)
 end
 
+function prodmod(vs::AbstractArray{Int64}, m::Int64)
+    reduce((a, b) -> (a * b) % m, vs)
+end
+
 function dot_mod(a::Vector{Int64}, b::Vector{Int64}, F::Int64)
     summod(a .* b .% F, F)
 end
