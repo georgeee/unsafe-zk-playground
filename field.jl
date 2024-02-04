@@ -12,12 +12,8 @@ function dot_mod(a::Vector{Int64}, b::Vector{Int64}, F::Int64)
     summod(a .* b .% F, F)
 end
 
-function inv_mod(x :: Int64, F :: Int64)
-    powermod(x, F - 2, F)
-end
-
 function div_mod(x :: Int64, y :: Int64, F :: Int64)
-    x * inv_mod(y, F) % F
+    x * invmod(y, F) % F
 end
 
 ps = Primes.primes(1000, 13000)

@@ -4,7 +4,7 @@ include("polynomial.jl")
 function lagrange_poly(lws, l_vanishing, i :: Int)
     a = repeat([lws[i]], length(lws)-1)
     b = vcat(lws[1:i-1], lws[i+1:end])
-    denominator_inv = inv_mod(prodmod(a .- b .+ F .% F, F), F)
+    denominator_inv = invmod(prodmod(a .- b .+ F .% F, F), F)
     numerator = poly_div_monomial(l_vanishing, F-lws[i])
     numerator .* denominator_inv .% F
 end

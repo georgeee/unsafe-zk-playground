@@ -27,7 +27,7 @@ end
 # Test fft ∘ inverse fft = identity
 fft_coefs_ = vcat([rand(0:F-1) for i = 1:div(N, 2)], zeros(Int64, div(N, 2)))
 ffted = fft(fft_coefs_, ws)
-fft_inverse = fft(ffted, iws) .* inv_mod(N, F) .% F
+fft_inverse = fft(ffted, iws) .* invmod(N, F) .% F
 @test fft_coefs_ == fft_inverse
 
 # It's possible to check that fft gives the same result as dummy_multiplication 

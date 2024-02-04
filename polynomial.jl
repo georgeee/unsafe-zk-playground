@@ -33,7 +33,7 @@ function poly_mul(a::Vector{Int64}, b::Vector{Int64})
 
     a_fft = fft(a, ws)
     b_fft = fft(b, ws)
-    r = fft(a_fft .* b_fft .% F, iws) .* inv_mod(N, F) .% F
+    r = fft(a_fft .* b_fft .% F, iws) .* invmod(N, F) .% F
     ensure_nonzero_lead(r)
 end
 
@@ -70,7 +70,7 @@ function poly_reciprocal(a::Vector{Int64})
 
     # Assuming that a's length is a power of 2
     if length(a) == 1
-        return [inv_mod(a[1], F)]
+        return [invmod(a[1], F)]
     end
 
     n_halved = div(length(a), 2)
@@ -150,7 +150,7 @@ function poly_div_monomial(dividend::Vector{Int64}, c::Int64)
         return dividend[2:end]
     end
     result = zeros(Int64, length(dividend) - 1)
-    c_inv = inv_mod(c, F)
+    c_inv = invmod(c, F)
     result[1] = dividend[1] * c_inv % F
     for i = 2:length(dividend)-1
         result[i] = (dividend[i] + F - result[i-1]) % F * c_inv % F
