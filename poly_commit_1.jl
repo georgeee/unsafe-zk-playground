@@ -20,7 +20,7 @@ coefs_matrix_N = coefs_matrix_side * coefs_matrix_side
 powers_sq_fst = 1:coefs_matrix_side
 powers_sq_snd = coefs_matrix_side * Vector(0:coefs_matrix_side-1) .+ 1
 
-p1c_ws = ws[1:(2^(pw - coefs_matrix_pw - rs_blowup_pw)):end]
+p1c_ws = ws[1:(2^(pw-coefs_matrix_pw-rs_blowup_pw)):end]
 
 function test_sq_matrix_eval()
     # Test evaluating polynomial via a squared-size matrix:
@@ -59,6 +59,23 @@ function merkle_rebuild_root(ix::Int64, el::Int64, proof::Vector{Int64})
     el
 end
 
+struct PolyCommitPoints
+    rand_point::Int64
+    aux_points::Vector{Int64}
+end
+
+import Base.==
+
+function (==)(a::PolyCommitPoints, b::PolyCommitPoints)
+    a.rand_point == b.rand_point && a.aux_points == b.aux_points
+end
+
+# Appends aux points generated out of a random point
+function append_aux!(points::PolyCommitPoints, f)
+    append!(points.aux_points, f(points.rand_point))
+    points
+end
+
 struct PolyCommit1Proof
     # commitment fields
     commitment::Int64 # merkle root of a commitment to vector of columns
@@ -66,8 +83,8 @@ struct PolyCommit1Proof
     columns::Matrix{Int64} # select codeword matrix columns
     column_proofs::Vector{Vector{Int64}} # merkle proofs of columns above
 
-    # pre-evaluation at points
-    points_preevaluated::Vector{Vector{Int64}}
+    rand_point_preevaluated::Vector{Int64} # pre-evaluation at a random point
+    aux_points_preevaluated::Vector{Vector{Int64}} # pre-evaluation at auxiliary points
 end
 
 # TODO consider replacing use of reduce(vcat, ...) with a safer approach (e.g. a foldl/foldr)
@@ -143,14 +160,14 @@ function seed_of_fiat_shamir(fiat_shamir_state)
     Random.Xoshiro(abs(fiat_shamir_state))
 end
 
-function extend_fiat_shamir(fiat_shamir_state :: Int64, new_data :: Vector{Int64})
+function extend_fiat_shamir(fiat_shamir_state::Int64, new_data::Vector{Int64})
     fnv1a(new_data, fiat_shamir_state)
 end
 
-function poly_commit_1_prove(coefs::Vector{Int64}, columns_to_check::Int, fiat_shamir_state :: Int64, sub_prove)
+function poly_commit_1_prove(coefs::Vector{Int64}, columns_to_check::Int, fiat_shamir_state::Int64, sub_prove)
     coefs = vcat(coefs, zeros(Int64, coefs_matrix_N - length(coefs)))
     coefs_sq = reshape(coefs, (coefs_matrix_side, coefs_matrix_side))
-    
+
     apply_fft_per_row = (c) -> fft(vcat(c, zeros(Int64, rs_blowup * coefs_matrix_side)), p1c_ws)
     codeword_matrix = transpose(hcat(apply_fft_per_row.(eachrow(coefs_sq))...))
     column_merkle = fnv1a_merkle(fnv1a.(eachcol(codeword_matrix)))
@@ -184,12 +201,13 @@ function poly_commit_1_prove(coefs::Vector{Int64}, columns_to_check::Int, fiat_s
     # Verifier sent points 
 
     # Prover sends
-    point_preevals = Vector{Vector{Int64}}([poly_commit_1_preevaluate(p, coefs_sq) for p in points])
+    rand_point_preeval = poly_commit_1_preevaluate(points.rand_point, coefs_sq)
+    aux_point_preevals = [poly_commit_1_preevaluate(p, coefs_sq) for p in points.aux_points]
 
-    logs = reduce(vcat, point_preevals; init=Vector{Int64}([]))
-    fiat_shamir_state = extend_fiat_shamir(fiat_shamir_state, logs)
-
-    fiat_shamir_state, (PolyCommit1Proof(commitment, r_evaluated, cols, col_proofs, point_preevals), subproof), points
+    fiat_shamir_state = extend_fiat_shamir(fiat_shamir_state, rand_point_preeval)
+    fiat_shamir_state = foldl(extend_fiat_shamir, aux_point_preevals; init=fiat_shamir_state)
+    proof = PolyCommit1Proof(commitment, r_evaluated, cols, col_proofs, rand_point_preeval, aux_point_preevals)
+    fiat_shamir_state, (proof, subproof), PolyCommitPoints(points.rand_point, [])
 end
 
 
@@ -203,7 +221,7 @@ function poly_commit_1_evaluate(col_ixs, cols, p, preeval)
 end
 
 # Verifies poly-commit-1 proof and extracts the evaluation
-function poly_commit_1_verify(proof :: PolyCommit1Proof, columns_to_check::Int, fiat_shamir_state :: Int64, sub_verify)
+function poly_commit_1_verify(proof::PolyCommit1Proof, columns_to_check::Int, fiat_shamir_state::Int64, sub_verify)
     # Prover sends
     commitment = proof.commitment
 
@@ -240,22 +258,22 @@ function poly_commit_1_verify(proof :: PolyCommit1Proof, columns_to_check::Int, 
 
     # Verifier sent points 
 
-    logs = reduce(vcat, proof.points_preevaluated; init=Vector{Int64}([]))
-    fiat_shamir_state = extend_fiat_shamir(fiat_shamir_state, logs)
+    fiat_shamir_state = extend_fiat_shamir(fiat_shamir_state, proof.rand_point_preevaluated)
+    fiat_shamir_state = foldl(extend_fiat_shamir, proof.aux_points_preevaluated; init=fiat_shamir_state)
 
     # Prover sends
-    evals = map((p, pr) -> poly_commit_1_evaluate(col_ixs, cols, p, pr), points, proof.points_preevaluated)
+    rand_eval = poly_commit_1_evaluate(col_ixs, cols, points.rand_point, proof.rand_point_preevaluated)
+    aux_evals = map((p, pr) -> poly_commit_1_evaluate(col_ixs, cols, p, pr), points.aux_points, proof.aux_points_preevaluated)
 
     # Verifier computes
-    fiat_shamir_state, (evals, subresult), points
+    fiat_shamir_state, (rand_eval, aux_evals, subresult), points.rand_point
 end
 
-function fss_rand_point(fiat_shamir_state, aux_points = [])
+function fss_rand_point(fiat_shamir_state, aux_points=Vector{Int64}([]))
     rand_point = rand(seed_of_fiat_shamir(fiat_shamir_state), 0:F-1)
-    points = [rand_point]
-    append!(points, aux_points)
-    fiat_shamir_state = extend_fiat_shamir(fiat_shamir_state, points)
-    (fiat_shamir_state, nothing, points)
+    fiat_shamir_state = extend_fiat_shamir(fiat_shamir_state, [rand_point])
+    fiat_shamir_state = extend_fiat_shamir(fiat_shamir_state, aux_points)
+    fiat_shamir_state, nothing, PolyCommitPoints(rand_point, aux_points)
 end
 
 # TODO document the nested commit convention (e.g. that the points are returned)
@@ -264,9 +282,9 @@ end
 function poly_commit_1_proof_verify_check(coefs::Vector{Int64}, columns_to_check::Int)
     point = rand(0:F-1)
     eval = eval_poly(coefs, point, F)
-    _, (proof, _), _ = poly_commit_1_prove(coefs, columns_to_check, point, (fss) -> fss_rand_point(fss, [point]))
-    _, (evaluated, _), _ = poly_commit_1_verify(proof, columns_to_check, point, (fss) -> fss_rand_point(fss, [point]))
-    evaluated[2] == eval
+    _, (proof, nothing), ps = poly_commit_1_prove(coefs, columns_to_check, point, (fss) -> fss_rand_point(fss, [point]))
+    _, (reval, evaluated, nothing), rand_point = poly_commit_1_verify(proof, columns_to_check, point, (fss) -> fss_rand_point(fss, [point]))
+    return evaluated == [eval] && ps.aux_points == [] && reval == eval_poly(coefs, rand_point, F) && rand_point == ps.rand_point
 end
 
 @test poly_commit_1_proof_verify_check(rand(0:F-1, coefs_matrix_N), 4)

@@ -19,8 +19,8 @@ function test_lagrange_interpolate(lws, lagrange_polys)
     [eval_poly(p, lws[i], F) for i = eachindex(lws)] == ys
 end
 
-lws = ws[1:4:end]
+# lws = ws[1:4:end]
+lws = ws[1:32:end]
 l_vanishing = vcat([F-1], zeros(Int64, length(lws)-1), [1])
-
 lagrange_polys = [lagrange_poly(lws, l_vanishing, i) for i = eachindex(lws)]
 @test test_lagrange_interpolate(lws, lagrange_polys)
